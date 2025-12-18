@@ -1,0 +1,32 @@
+[
+    {
+        "question": "Quel joueur a le meilleur % à 3 points sur les 5 derniers matchs ?",
+        "ground_truths": [
+            "Le joueur A avec 45.2% est le meilleur, suivi du joueur B à 38.9%."
+        ],
+        "contexts": [
+            "Statistiques de tirs à 3 points sur les 5 derniers matchs : Joueur A : 45.2%, Joueur B : 38.9%, Joueur C : 35.1%.",
+            "Le joueur A a réussi 12 tirs sur 26 tentés au-delà de l'arc."
+        ]
+    },
+    {
+        "question": "Quelle est la date limite pour soumettre la demande de subvention R&D mentionnée dans le document 'Rapport-Financier-Q3' ?",
+        "ground_truths": [
+            "La date limite de soumission est fixée au 31 décembre de l'année en cours."
+        ],
+        "contexts": [
+            "Le chapitre 4 du Rapport-Financier-Q3 détaille les opportunités de subvention R&D. La date limite pour cette soumission est le 31/12/YYYY.",
+            "Des fonds supplémentaires seront alloués au projet si la demande est soumise avant le 15 novembre."
+        ]
+    },
+    {
+        "question": "Quelles sont les spécifications techniques minimales pour le déploiement du nouveau serveur de base de données ?",
+        "ground_truths": [
+            "Les spécifications minimales sont : 32 Go de RAM, un processeur 8 cœurs (minimum i7 ou équivalent), et 2 To de stockage SSD."
+        ],
+        "contexts": [
+            "Le document 'Architecture_IT_2025' stipule les exigences minimales pour le DB-Serveur : 32GB RAM, CPU 8 cores (i7 ou mieux), 2TB SSD.",
+            "La configuration recommandée est de 64GB RAM et un double processeur Xeon."
+        ]
+    }
+]
