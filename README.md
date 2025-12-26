@@ -1,6 +1,19 @@
 # Assistant RAG avec Mistral
 
-Ce projet implémente un assistant virtuel basé sur le modèle Mistral, utilisant la technique de Retrieval-Augmented Generation (RAG) pour fournir des réponses précises et contextuelles à partir d'une base de connaissances personnalisée.
+🏀 Assistant RAG & SQL avec Mistral AI
+Ce projet implémente un assistant virtuel avancé basé sur le modèle Mistral, capable de répondre à des questions complexes en combinant deux approches : le RAG (Retrieval-Augmented Generation) pour les documents textuels (PDF) et un Agent SQL pour l'analyse de données statistiques structurées (Excel/NBA).
+
+🌟 Fonctionnalités
+🔍 Approche Hybride : Routage intelligent des requêtes vers la base vectorielle (FAISS) ou la base relationnelle (SQL).
+
+📊 Analyse de données NBA : Ingestion et interrogation de statistiques complexes via un pipeline Excel-to-SQL.
+
+✅ Validation de Données : Utilisation de Pydantic et Pydantic AI pour garantir l'intégrité des flux d'entrée et de sortie.
+
+📈 Évaluation de Performance : Framework de test intégré avec RAGAS pour calculer la précision et la fidélité des réponses.
+
+🪵 Observabilité : Tracing complet des appels LLM avec Pydantic Logfire.
+
 
 ## Fonctionnalités
 
@@ -53,15 +66,31 @@ MISTRAL_API_KEY=votre_clé_api_mistral
 
 ```
 .
-├── MistralChat.py          # Application Streamlit principale
-├── indexer.py              # Script pour indexer les documents
-├── inputs/                 # Dossier pour les documents sources
-├── vector_db/              # Dossier pour l'index FAISS et les chunks
-├── database/               # Base de données SQLite pour les interactions
-└── utils/                  # Modules utilitaires
-    ├── config.py           # Configuration de l'application
-    ├── database.py         # Gestion de la base de données
-    └── vector_store.py     # Gestion de l'index vectoriel
+.
+├── MistralChat.py             # Interface utilisateur Streamlit originale
+├── MistralChat_optimised.py   # Interface optimisée avec support hybride
+├── indexer.py                 # Script d'indexation vectorielle (FAISS)
+├── load_excel_to_db.py        # Migration des données Excel vers SQL
+├── evaluate_ragas.py          # Évaluation RAG standard
+├── evaluate_hybrid_ragas.py   # Évaluation du système hybride (RAG + SQL)
+├── eval_dataset.json          # Jeu de tests (questions/réponses métiers)
+├── requirements.txt           # Dépendances du projet
+│
+├── inputs/                    # Sources de données brutes
+│   ├── *.pdf                  # Rapports et documents textuels
+│   └── regular NBA.xlsx       # Données statistiques structurées
+│
+├── utils/                     # Logique métier et outils
+│   ├── config.py              # Paramètres API et modèles
+│   ├── data_loader.py         # Chargement des différents formats
+│   ├── sql_tools.py           # Agent de génération de requêtes SQL
+│   ├── schemas.py             # Validation des données (Pydantic)
+│   └── vector_store.py        # Gestion de l'index vectoriel
+│
+├── vector_db/                 # Stockage des bases de données
+│   ├── faiss_index.idx        # Index vectoriel pour la recherche sémantique
+│   ├── document_chunks.pkl    # Chunks de texte sauvegardés
+│   └── nba_analytics.db       # Base de données SQLite générée
 
 ```
 
@@ -93,10 +122,16 @@ Ce script va :
 4. Créer un index FAISS pour la recherche sémantique
 5. Sauvegarder l'index et les chunks dans le dossier `vector_db/`
 
+### 4. Lancer la création de la base de données SQL
+
+```bash
+python utils/load_excel_to_db.py
+```
+
 ### 3. Lancer l'application
 
 ```bash
-streamlit run MistralChat.py
+streamlit run MistralChat_optimised.py
 ```
 
 L'application sera accessible à l'adresse http://localhost:8501 dans votre navigateur.
@@ -125,6 +160,22 @@ Gère la base de données SQLite pour les interactions :
 - Stockage des feedbacks utilisateurs
 - Récupération des statistiques
 
+### inputs/regular NBA.xlsx 
+
+Ce fichier sert de source principale pour le volet analytique (SQL).
+
+### utils/schemas.py 
+
+Contient les classes Pydantic garantissant que les données importées depuis Excel respectent le format attendu avant l'insertion en base.
+
+### evaluate_hybrid_ragas.py 
+
+Ce script calcule des métriques spécifiques pour comparer la précision du système lorsqu'il doit choisir entre chercher dans un document PDF ou interroger la base SQL.
+
+### evaluate_ragas.py 
+
+Ce script calcule des métriques spécifiques pour comparer la précision du système standard.
+
 ## Personnalisation
 
 Vous pouvez personnaliser l'application en modifiant les paramètres dans `utils/config.py` :
@@ -132,4 +183,3 @@ Vous pouvez personnaliser l'application en modifiant les paramètres dans `utils
 - Taille des chunks et chevauchement
 - Nombre de documents par défaut
 - Nom de la commune ou organisation
-

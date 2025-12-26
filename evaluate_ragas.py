@@ -1,117 +1,126 @@
+# %% 1. ENV & CONFIG
 import os
 import json
 import traceback
 import pandas as pd
 from datasets import Dataset
+from dotenv import load_dotenv
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+load_dotenv()
+
 from langchain_mistralai.chat_models import ChatMistralAI
 from langchain_mistralai.embeddings import MistralAIEmbeddings
 from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
-from dotenv import load_dotenv
+from ragas.metrics import faithfulness, answer_relevancy
 
-load_dotenv()
-# ----------------- CONFIG ----------------- #
+# IMPORT DES SCHÉMAS PYDANTIC
+from utils.schemas import RAGQuery # Pour valider la question entrante
+
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 FILE_PATH = "eval_dataset.json"
 
-# ----------------- CHARGEMENT DU JSON ----------------- #
-try:
-    with open(FILE_PATH, 'r', encoding='utf-8') as f:
-        data_loaded = json.load(f)
-    print(f"✅ Fichier {FILE_PATH} chargé ({len(data_loaded)} questions trouvées).")
-except Exception as e:
-    print(f"❌ Erreur lors du chargement du fichier JSON : {e}")
-    raise
-
-# ----------------- INITIALISATION ----------------- #
+# %% 2. INITIALISATION
 try:
     mistral_llm = ChatMistralAI(
         mistral_api_key=MISTRAL_API_KEY,
         model="mistral-small-latest",
-        temperature=0.1
+        temperature=0
     )
     mistral_embeddings = MistralAIEmbeddings(mistral_api_key=MISTRAL_API_KEY)
+    
+    from utils.vector_store import VectorStoreManager
+    vsm = VectorStoreManager()
+    if vsm.index is None:
+        raise FileNotFoundError("L'index FAISS est introuvable.")
 except Exception as e:
-    print(f"❌ Erreur initialisation LLM : {e}")
-    raise
+    print(f"❌ Erreur initialisation : {e}"); raise
 
-# ----------------- PRÉPARATION DES DONNÉES ----------------- #
-questions = []
-ground_truths = []
-answers = []
-retrieved_contexts = []
-
-print("🚀 Génération des réponses via Mistral...")
+# %% 3. GÉNÉRATION DES DONNÉES AVEC VALIDATION PYDANTIC
+# ... (votre code précédent)
 
 for item in data_loaded:
-    q = item["question"]
-    # Ragas attend une seule string pour ground_truth, on prend le premier élément de la liste
+    q_raw = item["question"]
     gt = item["ground_truths"][0] if item["ground_truths"] else ""
-    # On garde la liste pour les contextes
-    ctx_list = item["contexts"]
     
-    # Appel au LLM
     try:
-        ans = mistral_llm.invoke(q).content
-    except Exception:
-        ans = ""
+        validated_query = RAGQuery(query_text=q_raw)
+        q = validated_query.query_text
+    except Exception as e:
+        print(f"⚠️ Question ignorée : {e}")
+        continue
+
+    # Recherche RAG
+    search_results = vsm.search(q, k=3) 
+    
+    # --- CORRECTION ICI ---
+    # On utilise .content (Pydantic) au lieu de ["text"] (Dict)
+    current_contexts = [res.content for res in search_results if res.content and "NaN" not in res.content]
+    
+    context_text = "\n".join(current_contexts)
+    prompt = f"En vous basant sur le contexte suivant :\n{context_text}\n\nQuestion : {q}\nRéponse précise :"
+    
+    try:
+        ans = mistral_llm.invoke(prompt).content
+        
+        # Validation simple de la sortie
+        if len(ans) < 5:
+            ans = "Réponse rejetée : Cohérence insuffisante."
+            
+    except:
+        ans = "Erreur technique de réponse."
 
     questions.append(q)
     ground_truths.append(gt)
     answers.append(ans)
-    retrieved_contexts.append(ctx_list)
+    retrieved_contexts.append(current_contexts)
 
-# Création du Dataset Ragas
-evaluation_data = {
+# %% 4. ÉVALUATION ET TABLEAU DE SYNTHÈSE
+
+
+evaluation_dataset = Dataset.from_dict({
     "question": questions,
     "answer": answers,
     "contexts": retrieved_contexts,
     "ground_truth": ground_truths
-}
-evaluation_dataset = Dataset.from_dict(evaluation_data)
-
-# ----------------- ÉVALUATION ----------------- #
-# Note: Ces métriques comparent Answer vs Context (Faithfulness) 
-
-metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
+})
 
 try:
-    print("\n⚖️ Lancement de l'évaluation Ragas...")
+    print("\n⚖️ Analyse RAGAS (Faithfulness & Relevancy)...")
     results = evaluate(
         dataset=evaluation_dataset,
-        metrics=metrics,
+        metrics=[faithfulness, answer_relevancy],
         llm=mistral_llm,
         embeddings=mistral_embeddings
     )
     
-    # 1. On transforme les scores en DataFrame
-    scores_df = results.to_pandas()
-    
-    # 2. On récupère les questions et données d'origine
-    inputs_df = evaluation_dataset.to_pandas()
-    
-    # 3. FUSION : On s'assure d'avoir les questions ET les scores dans le même tableau
-    # On concatène horizontalement (axis=1)
-    # On drop les colonnes redondantes dans scores_df s'il y en a
-    results_df = pd.concat([inputs_df, scores_df.drop(columns=['question', 'contexts', 'answer', 'ground_truth'], errors='ignore')], axis=1)
+    results_df = results.to_pandas()
 
-    # ----------------- AFFICHAGE SÉCURISÉ ----------------- #
-    print("\n" + "="*80)
-    print("RÉSULTATS DE L'ÉVALUATION")
-    print("="*80)
-    
-    # On définit les colonnes à afficher en vérifiant qu'elles existent
-    actual_metrics = [m.name for m in metrics]
-    cols_to_show = ['question'] + [c for c in actual_metrics if c in results_df.columns]
-    
-    print(results_df[cols_to_show])
+    if 'question' not in results_df.columns:
+        results_df.insert(0, 'question', questions)
+
+    # Préparation du tableau final
+    metrics_cols = ['faithfulness', 'answer_relevancy']
+    df_display = results_df[['question'] + metrics_cols].copy()
+    mean_scores = df_display[metrics_cols].mean()
+
+    mean_row = pd.DataFrame({
+        'question': ['--- MOYENNE GÉNÉRALE ---'],
+        'faithfulness': [mean_scores['faithfulness']],
+        'answer_relevancy': [mean_scores['answer_relevancy']]
+    })
+
+    final_table = pd.concat([df_display, mean_row], ignore_index=True)
 
     print("\n" + "="*80)
-    print("SCORES MOYENS GLOBAUX")
+    print("📊 SYNTHÈSE DES SCORES MÉTIERS (CONTRÔLÉS PAR PYDANTIC)")
     print("="*80)
-    # Moyenne uniquement sur les colonnes numériques de métriques
-    print(results_df[actual_metrics].mean())
+    print(final_table.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+    print("="*80)
+
+    final_table.to_csv("RAGAS_BASE_Model_Validated.csv", index=False)
+    print("\n✅ Rapport exporté : RAGAS_BASE_Model_Validated.csv")
 
 except Exception as e:
-    print(f"❌ Erreur lors de l'évaluation : {e}")
+    print(f"❌ Erreur évaluation : {e}")
     traceback.print_exc()

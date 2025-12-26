@@ -1,4 +1,4 @@
-# utils/data_loader.py
+# %% utils/data_loader.py
 import os
 import requests
 import zipfile
@@ -208,27 +208,38 @@ def download_and_extract_zip(url: str, output_dir: str) -> bool:
         logging.error(f"Erreur inattendue lors du téléchargement/extraction: {e}")
         return False
 
-def load_and_parse_files(input_dir: str) -> List[Dict[str, any]]:
+from utils.schemas import DocumentChunk # Import de votre schéma
+import logfire
+
+@logfire.instrument("Loading files from {input_dir}")
+def load_and_parse_files(input_dir: str) -> List[DocumentChunk]:
     """
     Charge et parse récursivement les fichiers d'un répertoire.
-    Retourne une liste de dictionnaires, chacun représentant un document.
+    Retourne une liste d'objets DocumentChunk (Pydantic).
     """
     documents = []
     input_path = Path(input_dir)
+    
     if not input_path.is_dir():
         logging.error(f"Le répertoire d'entrée '{input_dir}' n'existe pas.")
         return []
 
     logging.info(f"Parcours du répertoire source: {input_dir}")
-    for file_path in input_path.rglob("*.*"):
-        if file_path.is_file():
-            relative_path = file_path.relative_to(input_path)
-            source_folder = relative_path.parts[0] if len(relative_path.parts) > 1 else "root"
-            ext = file_path.suffix.lower()
+    
+    # Récupération de tous les fichiers
+    files = list(input_path.rglob("*.*"))
+    
+    for file_path in tqdm(files, desc="Parsing des fichiers"):
+        if not file_path.is_file():
+            continue
             
-            logging.debug(f"Traitement du fichier: {relative_path} (Dossier source: {source_folder})")
-
+        relative_path = file_path.relative_to(input_path)
+        ext = file_path.suffix.lower()
+        
+        # On utilise un span Logfire par fichier pour l'observabilité
+        with logfire.span(f"Parsing {relative_path}"):
             extracted_content = None
+            
             if ext == ".pdf":
                 extracted_content = extract_text_from_pdf(str(file_path))
             elif ext == ".docx":
@@ -239,38 +250,31 @@ def load_and_parse_files(input_dir: str) -> List[Dict[str, any]]:
                 extracted_content = extract_text_from_csv(str(file_path))
             elif ext in [".xlsx", ".xls"]:
                 extracted_content = extract_text_from_excel(str(file_path))
-            # Suppression de la gestion des fichiers HTML
             else:
-                logging.warning(f"Type de fichier non supporté ignoré: {relative_path}")
                 continue
 
             if not extracted_content:
-                logging.warning(f"Aucun contenu n'a pu être extrait de {relative_path}")
                 continue
             
-            # Si c'est un dictionnaire (plusieurs feuilles Excel), créer un doc par feuille
+            # --- Transformation en objets Pydantic DocumentChunk ---
+            
+            # Cas particulier : Excel (dictionnaire de feuilles)
             if isinstance(extracted_content, dict):
                 for sheet_name, text in extracted_content.items():
-                    documents.append({
-                        "page_content": text,
-                        "metadata": {
-                            "source": f"{str(relative_path)} (Feuille: {sheet_name})",
-                            "filename": file_path.name,
-                            "sheet": sheet_name,
-                            "category": source_folder,
-                            "full_path": str(file_path.resolve())
-                        }
-                    })
-            else: # Pour tous les autres types de fichiers
-                 documents.append({
-                    "page_content": extracted_content,
-                    "metadata": {
-                        "source": str(relative_path),
-                        "filename": file_path.name,
-                        "category": source_folder,
-                        "full_path": str(file_path.resolve())
-                    }
-                })
+                    doc = DocumentChunk(
+                        content=text,
+                        source=f"{str(relative_path)} (Sheet: {sheet_name})",
+                        page_number=None # On pourrait extraire l'index de la feuille ici
+                    )
+                    documents.append(doc)
+            else:
+                # Cas standard
+                doc = DocumentChunk(
+                    content=extracted_content,
+                    source=str(relative_path),
+                    page_number=None
+                )
+                documents.append(doc)
 
-    logging.info(f"{len(documents)} documents chargés et parsés.")
+    logging.info(f"{len(documents)} objets DocumentChunk créés et validés.")
     return documents

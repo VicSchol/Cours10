@@ -1,0 +1,6 @@
+question;faithfulness;answer_relevancy
+Qui est le meilleur marqueur de la saison en nombre de points total et quel est son score ?;0,71;0,91
+Quelle équipe possède le plus grand nombre total de points marqués sur la saison ?;1,00;0,00
+Quel est le pourcentage de réussite aux tirs et l'impacts de Nikola Jokic ?;0,29;0,90
+Quelle est la température moyenne à  Paris en plein mois de juillet ?;0,25;0,96
+MOYENNE GENERALE;0,56;0,69

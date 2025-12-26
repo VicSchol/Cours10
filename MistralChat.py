@@ -1,98 +1,132 @@
+import streamlit as st
 import os
-import json
-import pandas as pd
-from datasets import Dataset
+import logging
 from dotenv import load_dotenv
 
-# Imports LangChain / Ragas
-from langchain_mistralai.chat_models import ChatMistralAI
-from langchain_mistralai.embeddings import MistralAIEmbeddings
-from ragas import evaluate
-from ragas.metrics import faithfulness, answer_relevancy, context_precision, context_recall
+# --- FIX OPENMP (Indispensable sur Windows pour FAISS) ---
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
-# --- IMPORTS DE VOTRE PROJET ---
-from utils.vector_store import VectorStoreManager
-from utils.config import MISTRAL_API_KEY, MODEL_NAME, SEARCH_K
+# --- NOUVEAUX IMPORTS LANGCHAIN & MISTRAL V1 ---
+from langchain_mistralai.chat_models import ChatMistralAI
+from langchain_core.messages import HumanMessage, AIMessage
+
+# --- Importations depuis vos modules ---
+try:
+    from utils.config import (
+        MISTRAL_API_KEY, MODEL_NAME, SEARCH_K,
+        APP_TITLE, NAME
+    )
+    from utils.vector_store import VectorStoreManager
+except ImportError as e:
+    st.error(f"Erreur d'importation: {e}. Vérifiez votre structure de dossiers.")
+    st.stop()
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# ----------------- CONFIG & INIT ----------------- #
-FILE_PATH = "eval_dataset.json"
+# --- Configuration du modèle LangChain ---
+if not MISTRAL_API_KEY:
+    st.error("Clé API Mistral non trouvée dans le fichier .env.")
+    st.stop()
 
-# Initialisation du moteur de recherche (le même que dans MistralChat.py)
-v_manager = VectorStoreManager()
-
-# Initialisation des modèles pour l'évaluateur Ragas
-mistral_llm = ChatMistralAI(
+# Initialisation du LLM via le wrapper LangChain
+llm = ChatMistralAI(
     mistral_api_key=MISTRAL_API_KEY,
-    model="mistral-small-latest", # Recommandé pour l'évaluation
-    temperature=0
+    model=MODEL_NAME,
+    temperature=0.1
 )
-mistral_embeddings = MistralAIEmbeddings(mistral_api_key=MISTRAL_API_KEY)
 
-# Le prompt système utilisé dans votre App
-SYSTEM_PROMPT = """Tu es 'NBA Analyst AI', un assistant expert...
-{context_str}
-QUESTION: {question}"""
-
-# ----------------- PRÉPARATION DES DONNÉES ----------------- #
-try:
-    with open(FILE_PATH, 'r', encoding='utf-8') as f:
-        data_loaded = json.load(f)
-except Exception as e:
-    print(f"Erreur chargement JSON: {e}")
-    raise
-
-questions, ground_truths, answers, retrieved_contexts = [], [], [], []
-
-print(f"🚀 Simulation RAG sur {len(data_loaded)} questions...")
-
-for item in data_loaded:
-    q = item["question"]
-    gt = item["ground_truths"][0] if item["ground_truths"] else ""
-    
-    # 1. RETRIEVAL : On interroge FAISS (comme dans l'app)
-    search_results = v_manager.search(q, k=SEARCH_K)
-    
-    # Extraire le texte des chunks pour Ragas et pour le prompt
-    contexts = [res['text'] for res in search_results]
-    context_combined = "\n\n".join(contexts)
-    
-    # 2. GENERATION : On génère la réponse avec le prompt structuré
-    prompt_final = SYSTEM_PROMPT.format(context_str=context_combined, question=q)
+# --- Chargement du Vector Store (mis en cache) ---
+@st.cache_resource 
+def get_vector_store_manager():
     try:
-        ans = mistral_llm.invoke(prompt_final).content
-    except Exception:
-        ans = ""
+        manager = VectorStoreManager()
+        if manager.index is None:
+            return None
+        return manager
+    except Exception as e:
+        logging.error(f"Erreur chargement VectorStoreManager: {e}")
+        return None
 
-    questions.append(q)
-    ground_truths.append(gt)
-    answers.append(ans)
-    retrieved_contexts.append(contexts)
+vector_store_manager = get_vector_store_manager()
 
-# Création du Dataset
-evaluation_dataset = Dataset.from_dict({
-    "question": questions,
-    "answer": answers,
-    "contexts": retrieved_contexts,
-    "ground_truth": ground_truths
-})
+# --- Prompt Système pour RAG ---
+SYSTEM_PROMPT = """Tu es 'NBA Analyst AI', un assistant expert sur la ligue NBA.
+Ta mission est de répondre aux questions en te basant sur les documents fournis.
 
-# ----------------- ÉVALUATION RAGAS ----------------- #
-metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
+CONTEXTE FOURNI :
+{context_str}
 
-print("\n⚖️ Calcul des scores Ragas...")
-results = evaluate(
-    dataset=evaluation_dataset,
-    metrics=metrics,
-    llm=mistral_llm,
-    embeddings=mistral_embeddings
-)
+QUESTION DU FAN :
+{question}
 
-# Affichage des résultats
-df = results.to_pandas()
-print("\n=== RÉSULTATS PAR QUESTION ===")
-print(df[['question', 'faithfulness', 'answer_relevancy']].to_string())
+RÉPONSE DE L'ANALYSTE NBA :"""
 
-print("\n=== MOYENNES GLOBALES ===")
-print(results)
+# --- Interface Utilisateur Streamlit ---
+st.title(APP_TITLE)
+st.caption(f"Assistant virtuel pour {NAME} | Propulsé par LangChain & Mistral")
+
+
+
+# Initialisation de l'historique de conversation
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        AIMessage(content=f"Bonjour ! Je suis votre analyste IA pour la {NAME}. Posez-moi vos questions !")
+    ]
+
+# Affichage des messages de l'historique
+for message in st.session_state.messages:
+    role = "user" if isinstance(message, HumanMessage) else "assistant"
+    with st.chat_message(role):
+        st.write(message.content)
+
+# Zone de saisie utilisateur
+if prompt := st.chat_input("Posez votre question..."):
+    # 1. Ajouter et afficher le message de l'utilisateur
+    st.session_state.messages.append(HumanMessage(content=prompt))
+    with st.chat_message("user"):
+        st.write(prompt)
+
+    # 2. Vérifier le Vector Store
+    if vector_store_manager is None:
+        st.error("Base de connaissances indisponible.")
+        st.stop()
+
+    # 3. Logique RAG (Récupération et Génération)
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
+        status = message_placeholder.info("🔍 Recherche dans la base documentaire...")
+
+        try:
+            # Recherche de contexte
+            search_results = vector_store_manager.search(prompt, k=SEARCH_K)
+            
+            if search_results:
+                context_str = "\n\n".join([
+                    f"Source: {res['metadata'].get('filename', 'Doc')} | Extrait: {res['text']}" 
+                    for res in search_results
+                ])
+                status.info("✍️ Analyse des documents et rédaction...")
+            else:
+                context_str = "Aucune information trouvée dans les documents."
+                status.warning("⚠️ Pas de documents trouvés, réponse basée sur mes connaissances générales.")
+
+            # Construction du prompt final
+            final_prompt = SYSTEM_PROMPT.format(context_str=context_str, question=prompt)
+
+            # Appel au LLM via LangChain (.invoke remplace client.chat)
+            response = llm.invoke(final_prompt)
+            response_content = response.content
+
+            # Affichage de la réponse
+            message_placeholder.write(response_content)
+            
+            # Sauvegarde dans l'historique
+            st.session_state.messages.append(AIMessage(content=response_content))
+
+        except Exception as e:
+            st.error(f"Une erreur est survenue : {e}")
+            logging.exception("Erreur lors du processus RAG")
+
+st.markdown("---")
+st.caption("Mode RAG pur | Données indexées via FAISS")

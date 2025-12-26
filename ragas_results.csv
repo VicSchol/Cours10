@@ -1,6 +1,0 @@
-question,answer,faithfulness,answer_relevancy,context_recall
-Qui est le meilleur marqueur NBA cette saison ?,"D'après le contexte fourni, le meilleur marqueur NBA cette saison est le **joueur A** avec **32 points par match**.",0.9,0.8,0.85
-Quel joueur a le meilleur pourcentage à 3 points sur les 5 derniers matchs ?,"D'après le contexte fourni, il n'y a **aucune information** sur le pourcentage à 3 points des joueurs sur les **5 derniers matchs**.
-
-La seule donnée disponible concerne le joueur A (45% à 3 points **cette saison**).",0.9,0.8,0.85
-c ki le boss a 3pts,"D'après le contexte fourni, il n'y a pas d'information indiquant qui est ""le boss à 3pts"".",0.9,0.8,0.85

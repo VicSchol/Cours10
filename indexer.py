@@ -1,97 +1,87 @@
-# indexer.py
-import os, sys
+#%%
+import os
 import argparse
 import logging
-from typing import Optional
+import sys # Ajouté pour gérer les arguments système
+from typing import Optional, List
+from dotenv import load_dotenv
 
+# 1. Chargement de l'environnement et patch Logfire
+load_dotenv()
+if os.getenv("LOGFIRE_API_KEY") and not os.getenv("LOGFIRE_TOKEN"):
+    os.environ["LOGFIRE_TOKEN"] = os.getenv("LOGFIRE_API_KEY")
 
-
+import logfire
 from utils.config import INPUT_DIR
 from utils.data_loader import download_and_extract_zip, load_and_parse_files
 from utils.vector_store import VectorStoreManager
-from dotenv import load_dotenv
-# Assurez-vous que Logfire utilise le nom de variable attendu
-# Si vous avez LOGFIRE_API_KEY dans le .env, l'étape ci-dessous est cruciale
-if os.getenv("LOGFIRE_API_KEY") and not os.getenv("LOGFIRE_TOKEN"):
-    os.environ["LOGFIRE_TOKEN"] = os.getenv("LOGFIRE_API_KEY")
-    
-load_dotenv()
+# Import des schémas Pydantic
+from utils.schemas import DocumentChunk 
 
-# Import de Logfire
-import logfire 
-# --- Initialisation de Logfire ---
-# Logfire utilise la clé LOGFIRE_API_KEY dans votre environnement .env
-logfire.configure(project_name="Assistant-RAG-Mistral-Indexer")
-# --- Fin Initialisation Logfire ---
+# --- Initialisation Logfire ---
+# Suppression de project_name (déprécié)
+logfire.configure()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configuration logging standard
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
-# Utiliser le décorateur logfire.instrument pour tracer la fonction principale
 @logfire.instrument("RAG Indexing Pipeline")
 def run_indexing(input_directory: str, data_url: Optional[str] = None):
-    """Exécute le processus complet d'indexation."""
-    logging.info("--- Démarrage du processus d'indexation ---")
+    """Exécute le processus complet d'indexation avec validation Pydantic."""
     
-    # Enregistrer des attributs de trace (Logfire)
-    logfire.info("Configuration de l'indexation", input_dir=input_directory, data_url=data_url)
+    logging.info("--- Démarrage du processus d'indexation ---")
+    logfire.info("Configuration", input_dir=input_directory, data_url=data_url)
 
-    # # --- Étape 1: Téléchargement et Extraction (Optionnel) ---
+    # --- Étape 1: Acquisition des données ---
     if data_url:
-        with logfire.span("Download and Extract Data"): # Trace cette étape
-            logging.info(f"Tentative de téléchargement depuis l'URL: {data_url}")
-            success = download_and_extract_zip(data_url, input_directory)
-            if not success:
-                logging.error("Échec du téléchargement ou de l'extraction. Arrêt.")
+        with logfire.span("Download and Extract"):
+            logging.info(f"Téléchargement : {data_url}")
+            if not download_and_extract_zip(data_url, input_directory):
+                logging.error("Échec acquisition data. Arrêt.")
                 return
         
-    # --- Étape 2: Chargement et Parsing des Fichiers (Incluant Validation Pydantic) ---
-    with logfire.span("Load and Validate Documents"): # Trace cette étape
-        logging.info(f"Chargement et parsing des fichiers depuis: {input_directory}")
-        # Note: load_and_parse_files DOIT maintenant valider la sortie avec SourceDocument Pydantic
+    # --- Étape 2: Chargement et Validation Pydantic ---
+    with logfire.span("Load and Validate Documents"):
+        logging.info(f"Analyse du répertoire : {input_directory}")
+        
+        # Ici, load_and_parse_files doit retourner une List[SourceDocument] (Pydantic)
         documents = load_and_parse_files(input_directory) 
 
         if not documents:
-            logging.warning("Aucun document n'a été chargé ou parsé.")
+            logging.warning("Aucun document valide trouvé.")
             return
 
-        # Enregistrer le nombre de documents chargés
-        logfire.info("Documents chargés", count=len(documents))
-        
-    # --- Étape 3: Création/Mise à jour de l'index Vectoriel ---
-    with logfire.span("Build Vector Index"): # Trace cette étape
-        logging.info("Initialisation du gestionnaire de Vector Store...")
+        logfire.info("Statistiques Documents", count=len(documents))
+
+    # --- Étape 3: Création de l'index Vectoriel ---
+    with logfire.span("Build Vector Index"):
+        logging.info("Initialisation de FAISS...")
         vector_store = VectorStoreManager() 
 
-        logging.info("Construction de l'index Faiss (cela peut prendre du temps)...")
-        # Cette méthode (build_index) DOIT maintenant utiliser Pydantic pour valider 
-        # les chunks (DocumentChunk) et les chunks indexés (IndexedChunk).
-        vector_store.build_index(documents) 
+        try:
+            vector_store.build_index(documents)
+            logging.info("Indexation terminée.")
+        except Exception as e:
+            logging.error(f"Erreur lors de la création de l'index : {e}")
+            logfire.error("Indexation failed", error=str(e))
+            return
         
-    # --- Fin du Processus ---
-    logging.info("--- Processus d'indexation terminé avec succès ---")
+    # --- Résumé final ---
     if vector_store.index:
-        logfire.info("Index FAISS créé", chunks_count=vector_store.index.ntotal)
-    
+        chunks_indexed = vector_store.index.ntotal
+        logging.info(f"--- Succès : {chunks_indexed} chunks indexés ---")
+        logfire.info("Indexing Complete", total_chunks=chunks_indexed)
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Script d'indexation pour l'application RAG")
-    parser.add_argument(
-        "--input-dir",
-        type=str,
-        default=INPUT_DIR,
-        help=f"Répertoire contenant les fichiers sources (par défaut: {INPUT_DIR})"
-    )
-    parser.add_argument(
-        "--data-url",
-        type=str,
-        # default=INPUT_DATA_URL, # Décommentez pour utiliser la valeur du .env par défaut
-        default=None,
-        help="URL optionnelle pour télécharger et extraire un fichier inputs.zip"
-    )
-    args = parser.parse_args()
-
-    # Vérifier si l'URL est passée en argument, sinon prendre celle du .env (si définie)
-    # final_data_url = args.data_url if args.data_url is not None else INPUT_DATA_URL
-    # Simplification: on utilise seulement l'argument --data-url pour l'instant
-    final_data_url = args.data_url
-
-    run_indexing(input_directory=args.input_dir, data_url=final_data_url)
+    parser = argparse.ArgumentParser(description="Pipeline d'indexation RAG")
+    parser.add_argument("--input-dir", type=str, default=INPUT_DIR)
+    parser.add_argument("--data-url", type=str, default=None)
+    
+    # CORRECTIF JUPYTER : On utilise parse_known_args() au lieu de parse_args()
+    # Cela permet d'ignorer les arguments --f=... injectés par le kernel Jupyter
+    args, unknown = parser.parse_known_args()
+    
+    run_indexing(input_directory=args.input_dir, data_url=args.data_url)
